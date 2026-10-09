@@ -3,7 +3,7 @@ module github.com/microsoft/TypeScript/tsc
 go 1.27
 
 require (
-	g3pix.com.br/axonasp/v2 v2.0.0
+	g3pix.com.br/axonasp/v2 v2.3.28
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/google/go-cmp v0.7.0
 	github.com/klauspost/compress v1.20.1
@@ -30,6 +30,5 @@ tool (
 	golang.org/x/tools/cmd/stringer
 )
 
-// Preserve AxonASP's declared module path while pinning the GitHub fork.
-// Inlogik/axonasp main at a4d4d2b02ebd52e52e2e45e9eaa5a8df8a7b7955.
-replace g3pix.com.br/axonasp/v2 => github.com/Inlogik/axonasp/v2 v2.0.0-20261007235150-a4d4d2b02ebd
+// Preserve AxonASP's declared module path while pinning the upstream release.
+replace g3pix.com.br/axonasp/v2 => github.com/guimaraeslucas/axonasp/v2 v2.3.28

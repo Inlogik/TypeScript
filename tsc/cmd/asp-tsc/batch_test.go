@@ -42,6 +42,28 @@ func TestBatchKeepsPageScopesAndAggregatesSharedDiagnostics(t *testing.T) {
 	}
 }
 
+func TestAutomaticRootProjectDiscoveryAndOptOut(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "site", "pages")
+	os.MkdirAll(nested, 0700)
+	page := filepath.Join(nested, "page.asp")
+	os.WriteFile(page, []byte(`<%@ Language=JScript %><% var value='text';value=1; %>`), 0600)
+	project := filepath.Join(root, "asp-check.json")
+	os.WriteFile(project, []byte(`{"version":1,"root":"site","types":[],"looseVariables":true}`), 0600)
+	var out bytes.Buffer
+	if code := run([]string{page}, &out); code != 0 {
+		t.Fatalf("discovery: %d %s", code, &out)
+	}
+	out.Reset()
+	if code := run([]string{"--no-project", page}, &out); code != 1 {
+		t.Fatalf("opt-out: %d %s", code, &out)
+	}
+	out.Reset()
+	if code := run([]string{"--loose-variables=false", page}, &out); code != 1 {
+		t.Fatalf("override: %d %s", code, &out)
+	}
+}
+
 func TestBatchFailureAndWarningsOnlyExitCodes(t *testing.T) {
 	root := t.TempDir()
 	page := filepath.Join(root, "page.asp")
@@ -59,11 +81,11 @@ func TestBatchFailureAndWarningsOnlyExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if code := run([]string{"--scan", root, "--json"}, &out); code != 2 {
+	if code := run([]string{"--scan", root, "--json"}, &out); code != 1 {
 		t.Fatalf("%d %s", code, out.String())
 	}
 	var r batchResult
-	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Failed != 1 {
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Failed != 0 || r.WithErrors != 1 || r.Errors != 1 {
 		t.Fatalf("%v %+v", err, r)
 	}
 }

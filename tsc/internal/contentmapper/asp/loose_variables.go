@@ -12,7 +12,11 @@ import (
 // Existing JSDoc is conservatively preserved, including project-injected contracts.
 // Run after applySourceTypes so explicit project types win over this legacy mode.
 func (m *MappedFile) loosenVariables() {
-	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_loose.js")}, m.Text, core.ScriptKindJS)
+	kind := core.ScriptKindJS
+	if m.hasTypedSource() {
+		kind = core.ScriptKindTS
+	}
+	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_loose.js")}, m.Text, kind)
 	var edits []sourceEdit
 	var walk func(*ast.Node, []*ast.Node)
 	walk = func(n *ast.Node, ancestors []*ast.Node) {
@@ -22,7 +26,7 @@ func (m *MappedFile) loosenVariables() {
 			if len(ancestors) >= 2 && ancestors[len(ancestors)-1].Kind == ast.KindVariableDeclarationList && ancestors[len(ancestors)-2].Kind == ast.KindForInStatement {
 				return
 			}
-			annotated := len(n.JSDoc(file)) > 0
+			annotated := n.Type() != nil || len(n.JSDoc(file)) > 0
 			// JSDoc on a declaration statement/list applies to its bindings too.
 			for i := len(ancestors) - 1; i >= 0; i-- {
 				parent := ancestors[i]
@@ -33,7 +37,12 @@ func (m *MappedFile) loosenVariables() {
 			}
 			if !annotated {
 				start := scanner.GetTokenPosOfNode(n, file, false)
-				edits = append(edits, sourceEdit{start, start, "/** @type {any} */ "})
+				if kind == core.ScriptKindTS && ast.IsIdentifier(n.Name()) {
+					end := n.Name().End()
+					edits = append(edits, sourceEdit{end, end, ": any"})
+				} else if kind == core.ScriptKindJS {
+					edits = append(edits, sourceEdit{start, start, "/** @type {any} */ "})
+				}
 			}
 		}
 		n.ForEachChild(func(child *ast.Node) bool {

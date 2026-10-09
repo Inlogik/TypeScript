@@ -19,13 +19,16 @@ type VirtualSpan struct {
 // VirtualDocument uses UTF-16 offsets for VS Code, unlike the native compiler's
 // byte offsets. Declarations are a separate TS document, not invalid JS prefixes.
 type VirtualDocument struct {
-	Version      int               `json:"version"`
-	Entry        string            `json:"entry"`
-	Text         string            `json:"text"`
-	Declarations string            `json:"declarations"`
-	Spans        []VirtualSpan     `json:"spans"`
-	Sources      map[string]string `json:"sources"`
-	Error        string            `json:"error,omitempty"`
+	Version            int               `json:"version"`
+	Entry              string            `json:"entry"`
+	Text               string            `json:"text"`
+	Declarations       string            `json:"declarations"`
+	DeclarationSpans   []VirtualSpan     `json:"declarationSpans"`
+	DeclarationSources map[string]string `json:"declarationSources"`
+	Spans              []VirtualSpan     `json:"spans"`
+	Sources            map[string]string `json:"sources"`
+	Error              string            `json:"error,omitempty"`
+	ScriptKind         string            `json:"scriptKind"`
 }
 
 func utf16Length(text string) int { return len(utf16.Encode([]rune(text))) }
@@ -72,7 +75,7 @@ func PrepareVirtualWithOverlay(entry, root string, typeFiles []string, sourceTyp
 			return r
 		}
 	}
-	m, err := mapWithSources(entry, root, sources)
+	m, err := mapCheckingSources(entry, root, sources)
 	if err != nil {
 		r.Error = err.Error()
 		return r
@@ -86,6 +89,10 @@ func PrepareVirtualWithOverlay(entry, root string, typeFiles []string, sourceTyp
 	if err = m.applySourceTypes(sourceTypes, root); err != nil {
 		r.Error = err.Error()
 		return r
+	}
+	r.ScriptKind = "javascript"
+	if m.hasTypedSource() {
+		r.ScriptKind = "typescript"
 	}
 	m.defaultParameterTypes()
 	// VS Code normalizes mixed line endings when opening a document. Emit a
@@ -103,13 +110,23 @@ func PrepareVirtualWithOverlay(entry, root string, typeFiles []string, sourceTyp
 	}
 	m.applyEdits(newlines)
 	r.Text, r.Sources, r.Declarations = m.Text, m.Sources, hostTypes
+	r.DeclarationSpans = []VirtualSpan{}
+	r.DeclarationSources = map[string]string{}
 	for _, file := range typeFiles {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			r.Error = err.Error()
 			return r
 		}
+		absolute, err := filepath.Abs(file)
+		if err != nil {
+			r.Error = err.Error()
+			return r
+		}
+		start := utf16Length(r.Declarations) + 1
 		r.Declarations += "\n" + string(data)
+		r.DeclarationSpans = append(r.DeclarationSpans, VirtualSpan{Start: start, End: start + utf16Length(string(data)), File: absolute, OriginalStart: 0})
+		r.DeclarationSources[absolute] = string(data)
 	}
 	virtualOffsets := utf16Offsets(m.Text)
 	originalOffsets := map[string][]int{}

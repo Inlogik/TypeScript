@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	"g3pix.com.br/axonasp/v2/vbscript"
+	"github.com/microsoft/TypeScript/tsc/internal/core"
 )
 
 type Span struct {
@@ -20,9 +22,11 @@ type Span struct {
 }
 
 type MappedFile struct {
-	Text    string
-	Spans   []Span
-	Sources map[string]string
+	IncludeDiagnostics []Diagnostic
+	Text               string
+	Spans              []Span
+	Sources            map[string]string
+	lineStarts         map[string][]int
 }
 
 // Map expands file/virtual includes textually before scanning, so includes may
@@ -32,6 +36,20 @@ func Map(entry, root string) (*MappedFile, error) {
 }
 
 func mapWithSources(entry, root string, sources map[string]string) (*MappedFile, error) {
+	return mapSources(entry, root, sources, true)
+}
+
+func mapSources(entry, root string, sources map[string]string, legacy bool, caches ...*SourceCache) (*MappedFile, error) {
+	return mapSourcesMode(entry, root, sources, legacy, false, caches...)
+}
+
+// Editor/checking recovery omits unresolved includes, but strict mapping used
+// for deployment must still fail rather than emit an incomplete program.
+func mapCheckingSources(entry, root string, sources map[string]string) (*MappedFile, error) {
+	return mapSourcesMode(entry, root, sources, true, true)
+}
+
+func mapSourcesMode(entry, root string, sources map[string]string, legacy, recoverIncludes bool, caches ...*SourceCache) (*MappedFile, error) {
 	entry, err := filepath.Abs(entry)
 	if err != nil {
 		return nil, err
@@ -44,6 +62,9 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 	}
 	m := &MappedFile{Sources: map[string]string{}}
 	var expanded strings.Builder
+	if strings.HasSuffix(strings.ToLower(entry), ".inc.ts") || (recoverIncludes && strings.HasSuffix(strings.ToLower(entry), ".inc")) {
+		expanded.WriteString("<%@ Language=JScript %>\n")
+	}
 	var origins []Span
 	var expand func(string, int, map[string]bool) error
 	expand = func(file string, depth int, active map[string]bool) error {
@@ -56,10 +77,19 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 		}
 		active[key] = true
 		defer delete(active, key)
-		bytes, err := os.ReadFile(file)
-		for name, text := range sources {
+		var text string
+		var err error
+		if len(caches) > 0 && caches[0] != nil {
+			text, err = caches[0].read(file)
+		} else {
+			var data []byte
+			data, err = os.ReadFile(file)
+			text = string(data)
+		}
+		for name, overlay := range sources {
 			if strings.EqualFold(filepath.Clean(name), filepath.Clean(file)) {
-				bytes = []byte(text)
+				// Editor overlays take precedence and never enter the disk cache.
+				text = overlay
 				err = nil
 				break
 			}
@@ -67,7 +97,6 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 		if err != nil {
 			return err
 		}
-		text := string(bytes)
 		if !utf8.ValidString(text) {
 			return fmt.Errorf("%s: only UTF-8 ASP sources are supported", file)
 		}
@@ -111,7 +140,21 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 				appendSource(cursor, start)
 				resolved, err := resolve(file, path, virtual, root)
 				if err != nil {
-					return fmt.Errorf("%s: include %q: %w", file, path, err)
+					if !recoverIncludes {
+						return fmt.Errorf("%s: include %q: %w", file, path, err)
+					}
+					// Anchor to the original directive, not synthesized compiler text.
+					line, column := LineColumn(text, start)
+					endLine, endColumn := LineColumn(text, end)
+					m.IncludeDiagnostics = append(m.IncludeDiagnostics, Diagnostic{
+						File: file, Line: line, Column: column, EndLine: endLine, EndColumn: endColumn,
+						Code: 95002, Message: fmt.Sprintf("include %q: %v (checking continues without this include)", path, err),
+					})
+					// Keep a separator so omitted fragments cannot join adjacent tokens.
+					expanded.WriteByte('\n')
+					cursor = end
+					found = true
+					break
 				}
 				if err = expand(resolved, depth+1, active); err != nil {
 					return err
@@ -174,6 +217,9 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 			// because control-flow constructs can span HTML regions.
 			out.WriteByte('\n')
 		} else {
+			if !legacy && r.Kind == "static" && r.End > r.Start {
+				out.WriteString("__aspWrite(\"\");\n")
+			}
 			for _, c := range text[r.Start:r.End] {
 				if c == '\r' || c == '\n' {
 					out.WriteRune(c)
@@ -184,9 +230,16 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 		}
 	}
 	m.Text = out.String()
+	if !legacy {
+		return m, nil
+	}
 	m.normalizeStringContinuations()
 	m.rewriteMemberFunctions()
-	m.rewriteIndexedAssignments()
+	if m.hasTypedSource() {
+		m.rewriteIndexedAssignmentsForScript(core.ScriptKindTS)
+	} else {
+		m.rewriteIndexedAssignments()
+	}
 	m.rewriteDeleteIdentifiers()
 	m.rewriteCollectionCountCalls()
 	m.rewriteReservedIdentifiers()
@@ -194,6 +247,30 @@ func mapWithSources(entry, root string, sources map[string]string) (*MappedFile,
 }
 
 func resolve(file, path string, virtual bool, root string) (string, error) {
+	plain, err := resolveExact(file, path, virtual, root)
+	if !strings.HasSuffix(strings.ToLower(path), ".inc") {
+		return plain, err
+	}
+	typed, typedErr := resolveExact(file, path+".ts", virtual, root)
+	if err == nil && typedErr == nil {
+		return "", fmt.Errorf("include source collision: %s and %s", plain, typed)
+	}
+	if typedErr == nil {
+		return typed, nil
+	}
+	return plain, err
+}
+
+func (m *MappedFile) hasTypedSource() bool {
+	for file := range m.Sources {
+		if strings.HasSuffix(strings.ToLower(file), ".asp.ts") || strings.HasSuffix(strings.ToLower(file), ".inc.ts") {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveExact(file, path string, virtual bool, root string) (string, error) {
 	path = strings.ReplaceAll(strings.TrimSpace(path), "\\", "/")
 	if path == "" {
 		return "", fmt.Errorf("empty include path")
@@ -263,7 +340,28 @@ func (m *MappedFile) Position(pos int) (string, int, int) {
 		return "", 0, 0
 	}
 	offset := chosen.OriginalStart + max(0, min(pos-chosen.Start, chosen.End-chosen.Start))
-	line, col := LineColumn(m.Sources[chosen.File], offset)
+	if m.lineStarts == nil {
+		m.lineStarts = map[string][]int{}
+	}
+	text := m.Sources[chosen.File]
+	starts, ok := m.lineStarts[chosen.File]
+	if !ok {
+		starts = []int{0}
+		for i := 0; i < len(text); i++ {
+			if text[i] == '\r' {
+				if i+1 < len(text) && text[i+1] == '\n' {
+					i++
+				}
+				starts = append(starts, i+1)
+			} else if text[i] == '\n' {
+				starts = append(starts, i+1)
+			}
+		}
+		m.lineStarts[chosen.File] = starts
+	}
+	index := sort.Search(len(starts), func(i int) bool { return starts[i] > offset }) - 1
+	_, col := LineColumn(text[starts[index]:], offset-starts[index])
+	line := index + 1
 	return chosen.File, line, col
 }
 

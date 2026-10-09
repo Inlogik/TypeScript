@@ -37,6 +37,7 @@ type Diagnostic struct {
 
 // Report is the versioned check-on-save protocol. Positions are one-based UTF-16.
 type Report struct {
+	EmissionSafe bool         `json:"emissionSafe,omitempty"`
 	Version      int          `json:"version"`
 	Entry        string       `json:"entry"`
 	Dependencies []string     `json:"dependencies"`
@@ -80,6 +81,7 @@ type host struct {
 	compiler.CompilerHost
 	virtual, types tspath.RootedFilePath
 	mapped         *MappedFile
+	scriptKind     core.ScriptKind
 }
 
 type overlayFS struct {
@@ -103,7 +105,11 @@ func (f *overlayFS) ReadFile(path tspath.RootedFilePath) (string, bool) {
 
 func (h *host) GetSourceFile(opts ast.SourceFileParseOptions) *ast.SourceFile {
 	if opts.FileName == h.virtual {
-		return parser.ParseSourceFile(opts, h.mapped.Text, core.ScriptKindJS)
+		kind := h.scriptKind
+		if kind == core.ScriptKindUnknown {
+			kind = core.ScriptKindJS
+		}
+		return parser.ParseSourceFile(opts, h.mapped.Text, kind)
 	}
 	if opts.FileName == h.types {
 		return parser.ParseSourceFile(opts, hostTypes, core.ScriptKindTS)
@@ -146,7 +152,7 @@ func checkWithReportSources(ctx context.Context, entry, root string, typeFiles [
 	if err != nil {
 		return nil, err
 	}
-	m, err := mapWithSources(entry, root, sources)
+	m, err := mapCheckingSources(entry, root, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +179,7 @@ func checkWithReportSources(ctx context.Context, entry, root string, typeFiles [
 	if err = m.applySourceTypes(sourceTypesFile, root); err != nil {
 		return nil, err
 	}
+	typedEntry := m.hasTypedSource()
 	if looseVariables {
 		m.loosenVariables()
 	}
@@ -182,6 +189,9 @@ func checkWithReportSources(ctx context.Context, entry, root string, typeFiles [
 		return nil, err
 	}
 	virtual := tspath.RootedFilePathFromAbsolute(abs + ".__asp_check.js")
+	if typedEntry {
+		virtual = tspath.RootedFilePathFromAbsolute(abs + ".__asp_check.ts")
+	}
 	types := tspath.RootedFilePathFromAbsolute(abs + ".__asp_host.d.ts")
 	fs := &overlayFS{FS: bundled.WrapFS(osvfs.FS()), files: map[tspath.RootedFilePath]string{virtual: m.Text, types: hostTypes}}
 	roots := []tspath.RootedFilePath{virtual, types}
@@ -199,7 +209,10 @@ func checkWithReportSources(ctx context.Context, entry, root string, typeFiles [
 		}
 		roots = append(roots, path)
 	}
-	h := &host{compiler.NewCompilerHost(fs, bundled.LibPath(), nil, nil, nil), virtual, types, m}
+	h := &host{CompilerHost: compiler.NewCompilerHost(fs, bundled.LibPath(), nil, nil, nil), virtual: virtual, types: types, mapped: m}
+	if typedEntry {
+		h.scriptKind = core.ScriptKindTS
+	}
 	options := &core.CompilerOptions{
 		AllowJs:                    core.TSTrue,
 		CheckJs:                    core.TSTrue,
@@ -276,6 +289,12 @@ func checkWithReportSources(ctx context.Context, entry, root string, typeFiles [
 				result = append(result, d)
 				seen[d] = true
 			}
+		}
+	}
+	for _, d := range m.IncludeDiagnostics {
+		if !seen[d] {
+			result = append(result, d)
+			seen[d] = true
 		}
 	}
 	sortMappedDiagnostics(result)

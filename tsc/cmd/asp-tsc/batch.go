@@ -20,6 +20,7 @@ type projectConfig struct {
 	Version         int      `json:"version"`
 	Root            string   `json:"root"`
 	Entry           string   `json:"entry"`
+	Scan            string   `json:"scan"`
 	Types           []string `json:"types"`
 	DependencyRules string   `json:"dependencyRules"`
 	SourceTypes     string   `json:"sourceTypes"`
@@ -52,10 +53,34 @@ func readProject(file string) (projectConfig, error) {
 		return filepath.Join(base, value)
 	}
 	p.Root, p.Entry, p.DependencyRules, p.SourceTypes = resolve(p.Root), resolve(p.Entry), resolve(p.DependencyRules), resolve(p.SourceTypes)
+	p.Scan = resolve(p.Scan)
 	for i := range p.Types {
 		p.Types[i] = resolve(p.Types[i])
 	}
 	return p, nil
+}
+
+func discoverProject(start string) (string, error) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for {
+		file := filepath.Join(dir, "asp-check.json")
+		if info, err := os.Stat(file); err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("project config is a directory: %s", file)
+			}
+			return file, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
 }
 
 type batchDiagnostic struct {

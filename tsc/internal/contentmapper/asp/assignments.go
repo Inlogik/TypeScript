@@ -23,7 +23,11 @@ type sourceEdit struct {
 // inventing a setter method/signature on arbitrary COM objects. Compound and
 // update operators remain diagnostics rather than getting an unsafe rewrite.
 func (m *MappedFile) rewriteIndexedAssignments() {
-	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_rewrite.js")}, m.Text, core.ScriptKindJS)
+	m.rewriteIndexedAssignmentsForScript(core.ScriptKindJS)
+}
+
+func (m *MappedFile) rewriteIndexedAssignmentsForScript(kind core.ScriptKind) {
+	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_rewrite.js")}, m.Text, kind)
 	var edits []sourceEdit
 	var visit ast.Visitor
 	visit = func(n *ast.Node) bool {

@@ -6,6 +6,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/parser"
 	"github.com/microsoft/TypeScript/tsc/internal/scanner"
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
+	"strings"
 )
 
 // defaultParameterTypes prevents inference from making unannotated legacy
@@ -14,7 +15,11 @@ import (
 // default to preserve legacy omitted-argument behavior; extra arguments remain
 // checked. This compiler text is never executed or emitted.
 func (m *MappedFile) defaultParameterTypes() {
-	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_parameters.js")}, m.Text, core.ScriptKindJS)
+	kind := core.ScriptKindJS
+	if m.hasTypedSource() {
+		kind = core.ScriptKindTS
+	}
+	file := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: tspath.RootedFilePathFromNormalized("/__asp_parameters.js")}, m.Text, kind)
 	var edits []sourceEdit
 	var walk func(*ast.Node, *ast.Node)
 	walk = func(n, parent *ast.Node) {
@@ -41,10 +46,27 @@ func (m *MappedFile) defaultParameterTypes() {
 			}
 			if !wholeSignature {
 				for _, parameter := range n.Parameters() {
-					if len(parameter.JSDoc(file)) > 0 || (parameter.Name() != nil && typedNames[parameter.Name().Text()]) {
+					if parameter.Type() != nil || len(parameter.JSDoc(file)) > 0 || (parameter.Name() != nil && typedNames[parameter.Name().Text()]) {
 						continue
 					}
 					start := scanner.GetTokenPosOfNode(parameter, file, false)
+					if kind == core.ScriptKindTS {
+						source, _, _ := m.Position(start)
+						// Newly typed implementations keep TypeScript inference; only
+						// untouched JScript siblings retain legacy optional-any params.
+						if strings.HasSuffix(strings.ToLower(source), ".ts") || !ast.IsIdentifier(parameter.Name()) {
+							continue
+						}
+						end := parameter.Name().End()
+						annotation := ": any"
+						if parameter.AsParameterDeclaration().DotDotDotToken != nil {
+							annotation = ": any[]"
+						} else if parameter.AsParameterDeclaration().Initializer == nil {
+							annotation += " = undefined"
+						}
+						edits = append(edits, sourceEdit{end, end, annotation})
+						continue
+					}
 					annotation := "/** @type {any} */ "
 					if parameter.AsParameterDeclaration().DotDotDotToken != nil {
 						annotation = "/** @type {any[]} */ "

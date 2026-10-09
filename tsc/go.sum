@@ -1,9 +1,9 @@
-github.com/Inlogik/axonasp/v2 v2.0.0-20261007235150-a4d4d2b02ebd h1:jhNTU++blp71AZPIVr3PZwywO6hsjJEQ5ufNU/1Ajj8=
-github.com/Inlogik/axonasp/v2 v2.0.0-20261007235150-a4d4d2b02ebd/go.mod h1:cywFaUDOC5/b2z8rNg8ky87kimsA2E3ro2hRDcX/GfA=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/guimaraeslucas/axonasp/v2 v2.3.28 h1:vHAOtwNzhvIMi9tvGOUSlLrskOepxT/NP03QARPVjuk=
+github.com/guimaraeslucas/axonasp/v2 v2.3.28/go.mod h1:RXqN4LISP3W6fJRe2wh6760RLkRHV++p7b1Xe/T37vU=
 github.com/klauspost/compress v1.20.0 h1:a3C1ke2ohxFymNlb2HWAHjDeKCI90scRskErZkR0ezA=
 github.com/klauspost/compress v1.20.0/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
